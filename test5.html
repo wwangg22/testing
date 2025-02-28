@@ -1,0 +1,443 @@
+
+<!-- saved from url=(0126)https://storage.googleapis.com/jax3d-public/projects/mobilenerf/mobilenerf_viewer_mac/zdeferred_syn_mac_forward.html?obj=drums -->
+<html>
+        <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=windows-1252" />
+            <style>
+             html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The container is now 800x800, centered via translate. */
+#container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 800px;
+  height: 800px;
+  transform: translate(-50%, -50%);
+}
+
+/* Let the canvas just fill container's 800x800 */
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Basic info overlay in the lower-left corner */
+#info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  font-size: 20px;
+  color: #eee;
+  background-color: rgba(0, 0, 0, 0.4);
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+            </style>
+          </head>
+<body>
+          <div id="container"></div>
+
+    <!-- Overlay for info / FPS -->
+    <div id="info">
+      <div id="fpsdisplay">Loaded OBJs: 0/0  Loaded PNGs: 0/0</div>
+    </div>
+
+    <div id="info" style="position:absolute; top:800px; font-size: 50px;">
+        <div id="fpsdisplay">Loaded OBJs: 24/24  Loaded PNGs: 0/6</div>
+        <div id="sizedisplay">Size: 800x800</div>
+    </div>
+    
+    
+    <!-- Write to G-Buffer -->
+    <script id="gbuffer-vert" type="x-shader/x-vertex">
+        in vec3 position;
+        in vec2 uv;
+    
+        out vec2 vUv;
+        out vec3 vPosition;
+        out vec3 rayDirection;
+    
+        uniform mat4 modelViewMatrix;
+        uniform mat4 projectionMatrix;
+        uniform mat4 modelMatrix;
+        uniform vec3 cameraPosition;
+    
+        void main() {
+            vUv = uv;
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+            rayDirection = (modelMatrix * vec4( position, 1.0 )).rgb - cameraPosition;
+        }
+    </script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+
+    <script type="module">
+    
+    
+      import WebGL from 'https://unpkg.com/three/examples/jsm/capabilities/WebGL.js?module';
+    
+      import { OBJLoader } from 'https://unpkg.com/three/examples/jsm/loaders/OBJLoader.js?module';
+    
+      import { OrbitControls } from 'https://unpkg.com/three/examples/jsm/controls/OrbitControls.js?module';
+    
+    
+    // modified from SNeRG
+    
+    //the MLP
+    const viewDependenceNetworkShaderFunctions = `
+        precision mediump float;
+
+in vec2 vUv;
+in vec3 vPosition;
+in vec3 rayDirection;
+
+out vec4 fragColor;
+
+uniform mediump sampler2D tDiffuse0;
+uniform mediump sampler2D tDiffuse1;
+
+mediump vec3 evaluateNetwork(
+    mediump vec4 f0,    // 4D feature #1
+    mediump vec4 f1,    // 4D feature #2
+    mediump vec4 viewdir // (dir.xyz, plus .a is used later)
+) {
+    // -- LAYER 0 --
+    // Move the direction inputs to the front, then the rest of the features:
+    // original code appended viewdir at the end; now we do [dir, features]
+    mediump mat4 intermediate_one = mat4(
+        BIAS_LIST_ZERO
+    );
+
+    // Direction first (with the same flipping of Y/Z, i.e. -viewdir.b if that is important):
+    intermediate_one +=
+          viewdir.r * mat4(__W0_0__)
+        - viewdir.b * mat4(__W0_1__)   // "switch y-z axes"
+        + viewdir.g * mat4(__W0_2__)
+        
+        // Then f0
+        + f0.r * mat4(__W0_3__)
+        + f0.g * mat4(__W0_4__)
+        + f0.b * mat4(__W0_5__)
+        + f0.a * mat4(__W0_6__)
+
+        // Then f1
+        + f1.r * mat4(__W0_7__)
+        + f1.g * mat4(__W0_8__)
+        + f1.b * mat4(__W0_9__)
+        + f1.a * mat4(__W0_10__);
+
+    // ReLU
+    intermediate_one[0] = max(intermediate_one[0], 0.0);
+    intermediate_one[1] = max(intermediate_one[1], 0.0);
+    intermediate_one[2] = max(intermediate_one[2], 0.0);
+    intermediate_one[3] = max(intermediate_one[3], 0.0);
+
+    // -- LAYER 1 --
+    mediump mat4 intermediate_two = mat4(
+        BIAS_LIST_ONE
+    );
+    intermediate_two +=
+          intermediate_one[0][0] * mat4(__W1_0__)
+        + intermediate_one[0][1] * mat4(__W1_1__)
+        + intermediate_one[0][2] * mat4(__W1_2__)
+        + intermediate_one[0][3] * mat4(__W1_3__)
+        + intermediate_one[1][0] * mat4(__W1_4__)
+        + intermediate_one[1][1] * mat4(__W1_5__)
+        + intermediate_one[1][2] * mat4(__W1_6__)
+        + intermediate_one[1][3] * mat4(__W1_7__)
+        + intermediate_one[2][0] * mat4(__W1_8__)
+        + intermediate_one[2][1] * mat4(__W1_9__)
+        + intermediate_one[2][2] * mat4(__W1_10__)
+        + intermediate_one[2][3] * mat4(__W1_11__)
+        + intermediate_one[3][0] * mat4(__W1_12__)
+        + intermediate_one[3][1] * mat4(__W1_13__)
+        + intermediate_one[3][2] * mat4(__W1_14__)
+        + intermediate_one[3][3] * mat4(__W1_15__);
+
+    // ReLU
+    intermediate_two[0] = max(intermediate_two[0], 0.0);
+    intermediate_two[1] = max(intermediate_two[1], 0.0);
+    intermediate_two[2] = max(intermediate_two[2], 0.0);
+    intermediate_two[3] = max(intermediate_two[3], 0.0);
+
+    // -- LAYER 2 (final) --
+    mediump vec3 result = vec3(
+        BIAS_LIST_TWO
+    );
+    result +=
+          intermediate_two[0][0] * vec3(__W2_0__)
+        + intermediate_two[0][1] * vec3(__W2_1__)
+        + intermediate_two[0][2] * vec3(__W2_2__)
+        + intermediate_two[0][3] * vec3(__W2_3__)
+        + intermediate_two[1][0] * vec3(__W2_4__)
+        + intermediate_two[1][1] * vec3(__W2_5__)
+        + intermediate_two[1][2] * vec3(__W2_6__)
+        + intermediate_two[1][3] * vec3(__W2_7__)
+        + intermediate_two[2][0] * vec3(__W2_8__)
+        + intermediate_two[2][1] * vec3(__W2_9__)
+        + intermediate_two[2][2] * vec3(__W2_10__)
+        + intermediate_two[2][3] * vec3(__W2_11__)
+        + intermediate_two[3][0] * vec3(__W2_12__)
+        + intermediate_two[3][1] * vec3(__W2_13__)
+        + intermediate_two[3][2] * vec3(__W2_14__)
+        + intermediate_two[3][3] * vec3(__W2_15__);
+
+    // Sigmoid
+    result = 1.0 / (1.0 + exp(-result));
+
+    // Mix final output using viewdir.a
+    return result * viewdir.a + (1.0 - viewdir.a);
+}
+
+void main() {
+
+    vec4 diffuse1 = texture(tDiffuse0, vUv);
+    // If alpha is zero, discard
+    if (diffuse1.r == 0.0) discard;
+
+    // viewdir = (normalized direction, plus .w=1.0 for mixing)
+    vec3 dir = normalize(rayDirection);
+
+    // Shift and scale from [-1,1] -> [0,1].
+    vec3 dir01 = dir * 0.5 + 0.5;
+
+    vec4 diffuse0 = vec4(dir01, 1.0);
+
+    vec4 diffuse2 = texture(tDiffuse1, vUv);
+
+    // iOS quirk fix
+    diffuse1.a = diffuse1.a * 2.0 - 1.0;
+    diffuse2.a = diffuse2.a * 2.0 - 1.0;
+
+    // Evaluate network: now direction is effectively the front part of input
+   // Get the network's output
+    vec3 color = evaluateNetwork(diffuse1, diffuse2, diffuse0);
+
+    // Swap R and B, for instance
+    fragColor.r = color.r;
+    fragColor.g = color.g;
+    fragColor.b = color.b;
+
+    fragColor.a = 1.0;
+}
+
+    `;
+
+    function createViewDependenceFunctions(network_weights) {
+        let fragmentShaderSource = viewDependenceNetworkShaderFunctions;
+      
+        
+  fragmentShaderSource = fragmentShaderSource.replace(
+    new RegExp('BIAS_LIST_ZERO', 'g'), network_weights['0_bias'].join(', '));
+fragmentShaderSource = fragmentShaderSource.replace(
+    new RegExp('BIAS_LIST_ONE', 'g'), network_weights['1_bias'].join(', '));
+fragmentShaderSource = fragmentShaderSource.replace(
+    new RegExp('BIAS_LIST_TWO', 'g'), network_weights['2_bias'].join(', '));
+
+for(let i = 0; i < network_weights['0_weights'].length; i++) {
+  fragmentShaderSource = fragmentShaderSource.replace(
+      new RegExp(`__W0_${i}__`, 'g'), network_weights['0_weights'][i].join(', '));
+}
+for(let i = 0; i < network_weights['1_weights'].length; i++) {
+  fragmentShaderSource = fragmentShaderSource.replace(
+      new RegExp(`__W1_${i}__`, 'g'), network_weights['1_weights'][i].join(', '));
+}
+for(let i = 0; i < network_weights['2_weights'].length; i++) {
+  fragmentShaderSource = fragmentShaderSource.replace(
+      new RegExp(`__W2_${i}__`, 'g'), network_weights['2_weights'][i].join(', '));
+}
+      
+        return fragmentShaderSource;
+      }
+      
+      /**
+       * Reorder a single row (16 floats) from row-major to column-major for mat4().
+       * e.g. input: [ r0c0, r0c1, r0c2, r0c3, r1c0, r1c1, ... r3c3 ]
+       * output: [ c0r0, c0r1, c0r2, c0r3, c1r0, ... c3r3 ]
+       */
+      function reorderRowToColumnMajor(a) {
+        return [
+          a[0], a[4],  a[8],  a[12],   // column 0
+          a[1], a[5],  a[9],  a[13],   // column 1
+          a[2], a[6],  a[10], a[14],   // column 2
+          a[3], a[7],  a[11], a[15]    // column 3
+        ];
+      }
+      
+    
+    
+      let container;
+    
+      let camera, scene, renderer, controls;
+      let renderTarget;
+      let postScene, postCamera;
+    
+      let gLastFrame = window.performance.now();
+      let oldMilliseconds = 1000;
+      let gLoadedOBJs = 0;
+      let gLoadedPNGs = 0;
+      let gTotalOBJs = 0;
+      let gTotalPNGs = 0;
+    
+      const preset_size_w = 800;
+      const preset_size_h = 800;
+      const object_rescale = 0.1;
+    
+      init();
+    
+      function init() {
+    
+        const params = new URL(window.location.href).searchParams;
+        const objname = params.get('obj');
+    
+        let obj_name = 'test5';
+        if (objname) {
+          obj_name = objname;
+        }
+    
+        if ( WebGL.isWebGL2Available() === false ) {
+            document.body.appendChild( WebGL.getWebGL2ErrorMessage() );
+            return;
+        }
+    
+        container = document.getElementById( 'container' );
+        renderer = new THREE.WebGLRenderer({
+            powerPreference: 'high-performance',
+            precision: 'highp',
+        });
+        renderer.setPixelRatio( 2 ); //supersampling
+        renderer.setSize( preset_size_w, preset_size_h );
+        renderer.setClearColor( new THREE.Color("rgb(255, 255, 255)"), 1.0 )
+        container.appendChild( renderer.domElement );
+    
+        camera = new THREE.PerspectiveCamera( 39, preset_size_w/preset_size_h, 2*object_rescale, 6*object_rescale );
+        camera.position.y = 2.0*object_rescale;
+        camera.position.z = 3.464*object_rescale;
+    
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.screenSpacePanning = true;
+    
+    
+    
+        // Create a new scene
+        scene = new THREE.Scene();
+
+        // Set the background to a solid color (e.g., light blue)
+
+    
+        fetch(obj_name+'_mac/mlp.json').then(response => {
+            return response.json();
+        }).then(json => {
+        obj_name = "test5"
+        gTotalPNGs = 3;
+        gTotalOBJs = 6;
+    
+        let network_weights = json;
+        let fragmentShaderSource = createViewDependenceFunctions(network_weights);
+        
+        for ( let i = 0, il = 2; i < il; i ++ ) {
+            let tex0 = new THREE.TextureLoader().load(
+                obj_name+'_mac/shape'+i.toFixed(0)+'.png'+"feat0.png",
+                function () {
+                    gLoadedPNGs++;
+                    render();
+                }
+            );
+            tex0.magFilter = THREE.NearestFilter;
+            tex0.minFilter = THREE.NearestFilter;
+            let tex1 = new THREE.TextureLoader().load(
+                obj_name+'_mac/shape'+i.toFixed(0)+'.png'+"feat1.png",
+                function () {
+                    gLoadedPNGs++;
+                    render();
+                }
+            );
+            tex1.magFilter = THREE.NearestFilter;
+            tex1.minFilter = THREE.NearestFilter;
+            let newmat = new THREE.RawShaderMaterial({
+                side: THREE.DoubleSide,
+                vertexShader: document.querySelector( '#gbuffer-vert' ).textContent.trim(),
+                fragmentShader: fragmentShaderSource,
+                uniforms: {
+                    tDiffuse0: { value: tex0 },
+                    tDiffuse1: { value: tex1 },
+                },
+                glslVersion: THREE.GLSL3
+            });
+            for ( let j = 0; j < 1; j ++ ) {
+                new OBJLoader()
+                    .load(obj_name+'_mac/shape'+i.toFixed(0)+'.obj', function (object) {
+                        object.traverse(function (child) {
+                            if (child.type=='Mesh') {
+                                child.material = newmat;
+                            }
+                        });
+                        gLoadedOBJs++;
+                        object.scale.x = object_rescale;
+                        object.scale.y = object_rescale;
+                        object.scale.z = object_rescale;
+                        scene.add(object);
+                });
+            }
+        }
+    
+        window.addEventListener( 'resize', onWindowResize, false );
+        onWindowResize();
+    
+        animate();
+        });
+      }
+    
+      function onWindowResize() {
+    
+        camera.aspect = preset_size_w/preset_size_h;
+        camera.updateProjectionMatrix();
+    
+        renderer.setSize( preset_size_w, preset_size_h );
+    
+        document.getElementById('sizedisplay').innerHTML = "Size: "+(preset_size_w).toFixed(0)+"x"+(preset_size_h).toFixed(0);
+    
+        render();
+      }
+    
+    function updateFPSCounter() {
+        let currentFrame = window.performance.now();
+        let milliseconds = currentFrame - gLastFrame;
+        let smoothMilliseconds = oldMilliseconds * (0.95) + milliseconds * 0.05;
+        let smoothFps = 1000 / smoothMilliseconds;
+        gLastFrame = currentFrame;
+        oldMilliseconds = smoothMilliseconds;
+        if (gTotalOBJs==0 || gLoadedOBJs!=gTotalOBJs || gLoadedPNGs!=gTotalPNGs) {
+            document.getElementById('fpsdisplay').innerHTML = "Loaded OBJs: "+gLoadedOBJs.toFixed(0) + "/" + gTotalOBJs.toFixed(0) + "  Loaded PNGs: "+gLoadedPNGs.toFixed(0) + "/" + gTotalPNGs.toFixed(0);
+        }
+        else {
+            document.getElementById('fpsdisplay').innerHTML = "FPS: "+smoothFps.toFixed(1);
+        }
+    }
+    
+      function animate() {
+    
+        requestAnimationFrame( animate );
+    
+        controls.update();
+    
+        render();
+    
+      }
+    
+      function render() {
+        renderer.render( scene, camera );
+        updateFPSCounter();
+      }
+    </script></body></html>

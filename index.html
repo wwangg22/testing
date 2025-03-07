@@ -300,7 +300,7 @@ for(let i = 0; i < network_weights['2_weights'].length; i++) {
         const params = new URL(window.location.href).searchParams;
         const objname = params.get('obj');
     
-        let obj_name = 'test5';
+        let obj_name = objname;
         if (objname) {
           obj_name = objname;
         }
@@ -339,7 +339,7 @@ for(let i = 0; i < network_weights['2_weights'].length; i++) {
         fetch(obj_name+'_mac/mlp.json').then(response => {
             return response.json();
         }).then(json => {
-        obj_name = "test5"
+        obj_name = objname;
         gTotalPNGs = 3;
         gTotalOBJs = 6;
     

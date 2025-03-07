@@ -346,7 +346,7 @@ for(let i = 0; i < network_weights['2_weights'].length; i++) {
         let network_weights = json;
         let fragmentShaderSource = createViewDependenceFunctions(network_weights);
         
-        for ( let i = 0, il = 2; i < il; i ++ ) {
+        for ( let i = 0, il = 13; i < il; i ++ ) {
             let tex0 = new THREE.TextureLoader().load(
                 obj_name+'_mac/shape'+i.toFixed(0)+'.png'+"feat0.png",
                 function () {

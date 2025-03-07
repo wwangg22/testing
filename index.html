@@ -320,7 +320,7 @@ for(let i = 0; i < network_weights['2_weights'].length; i++) {
         renderer.setClearColor( new THREE.Color("rgb(255, 255, 255)"), 1.0 )
         container.appendChild( renderer.domElement );
     
-        camera = new THREE.PerspectiveCamera( 39, preset_size_w/preset_size_h, 2*object_rescale, 6*object_rescale );
+        camera = new THREE.PerspectiveCamera( 39, preset_size_w/preset_size_h, 0.3*object_rescale, 6*object_rescale );
         camera.position.y = 2.0*object_rescale;
         camera.position.z = 3.464*object_rescale;
     
